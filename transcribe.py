@@ -342,13 +342,13 @@ def transcribe_audio(
                 try:
                     progress.update(main_task, description="👥 Identifying speakers...", advance=5)
                     if hf_token:
-                        diarize_model = whisperx.DiarizationPipeline(
+                        diarize_model = whisperx.diarize.DiarizationPipeline(
                             use_auth_token=hf_token, 
                             device=device
                         )
                     else:
                         # Try without token (works for some languages like Swedish)
-                        diarize_model = whisperx.DiarizationPipeline(device=device)
+                        diarize_model = whisperx.diarize.DiarizationPipeline(device=device)
                     
                     diarize_segments = diarize_model(audio)
                     result = whisperx.assign_word_speakers(diarize_segments, result)
