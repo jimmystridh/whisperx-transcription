@@ -222,7 +222,8 @@ class TranscriptionHandler(FileSystemEventHandler):
                 sys.executable,
                 str(self.script_path),
                 str(file_path),
-                "-o", str(self.transcripts_dir)
+                "-o", str(self.transcripts_dir),
+                "--all-formats"
             ]
             
             console.print(f"🚀 Running: [dim]{' '.join(cmd)}[/dim]")
@@ -231,7 +232,7 @@ class TranscriptionHandler(FileSystemEventHandler):
             # Run transcription with timeout (let transcribe.py handle all progress display)
             result = subprocess.run(
                 cmd,
-                timeout=3600  # 1 hour timeout
+                timeout=7200  # 2 hour timeout for large files
             )
             
             if result.returncode == 0:
@@ -409,9 +410,8 @@ Examples:
         str(script_path)
     )
     
-    # Process existing files if requested
-    if args.process_existing or args.once:
-        handler.process_existing_files()
+    # Always process existing files on startup
+    handler.process_existing_files()
     
     if args.once:
         console.print()

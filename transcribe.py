@@ -18,6 +18,7 @@ import torch
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
+from datetime import datetime, timedelta
 from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
@@ -245,6 +246,29 @@ def detect_language(audio_path: str, device: str = "cpu") -> Tuple[str, float]:
         return "en", 0.0
 
 
+def calculate_eta(start_time: float, current_progress: float, total_progress: float = 100) -> str:
+    """Calculate estimated time of arrival based on current progress."""
+    if current_progress <= 0:
+        return "Calculating..."
+    
+    elapsed = time.time() - start_time
+    rate = current_progress / elapsed  # progress per second
+    remaining = total_progress - current_progress
+    
+    if rate <= 0:
+        return "Calculating..."
+    
+    eta_seconds = remaining / rate
+    if eta_seconds > 3600:  # More than 1 hour
+        eta_str = f"{eta_seconds/3600:.1f}h"
+    elif eta_seconds > 60:  # More than 1 minute
+        eta_str = f"{eta_seconds/60:.1f}m"
+    else:
+        eta_str = f"{eta_seconds:.0f}s"
+    
+    return eta_str
+
+
 def transcribe_audio(
     audio_path: str,
     output_dir: str,
@@ -269,49 +293,91 @@ def transcribe_audio(
     console.print()
     
     try:
-        # Create progress tracking
+        # Create enhanced progress tracking with ETA
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            TextColumn("[dim]ETA: {task.fields[eta]}[/dim]"),
             console=console,
             transient=False
         ) as progress:
             
-            main_task = progress.add_task("🚀 Starting transcription...", total=100)
+            main_task = progress.add_task("🚀 Starting transcription...", total=100, eta="Calculating...")
             
             # Load audio
-            progress.update(main_task, description="📁 Loading audio file...", advance=10)
+            progress.update(main_task, description="📁 Loading audio file...", advance=10, eta="Calculating...")
             audio = whisperx.load_audio(audio_path)
             
             # Get audio duration for better progress tracking
             duration = len(audio) / 16000  # WhisperX uses 16kHz
             console.print(f"📊 Audio duration: {duration:.1f} seconds ({duration/60:.1f} minutes)")
             
+            # Track the actual processing pace
+            progress_start_time = time.time()
+            
             # Detect language if not provided
             if language is None:
-                progress.update(main_task, description="🔍 Detecting language...", advance=5)
+                current_progress = progress.tasks[main_task].completed + 5
+                eta = calculate_eta(progress_start_time, current_progress)
+                progress.update(main_task, description="🔍 Detecting language...", advance=5, eta=eta)
                 language, confidence = detect_language(audio_path, device)
                 if confidence < 0.5:
                     console.print("[yellow]⚠️ Low confidence language detection[/yellow]")
             else:
                 # Skip language detection, advance progress
-                progress.update(main_task, description=f"🌍 Using specified language: {language.upper()}...", advance=5)
+                current_progress = progress.tasks[main_task].completed + 5
+                eta = calculate_eta(progress_start_time, current_progress)
+                progress.update(main_task, description=f"🌍 Using specified language: {language.upper()}...", advance=5, eta=eta)
             
             # Load transcription model
-            progress.update(main_task, description=f"🤖 Loading Whisper model ({language.upper()})...", advance=15)
-            model = whisperx.load_model("large-v3", device, compute_type="int8", language=language)
+            current_progress = progress.tasks[main_task].completed + 15
+            eta = calculate_eta(progress_start_time, current_progress)
+            progress.update(main_task, description=f"🤖 Loading Whisper model ({language.upper()})...", advance=15, eta=eta)
+            model = whisperx.load_model("large-v3", device, compute_type="float32", language=language)
             
             # Transcribe (pass language explicitly to avoid WhisperX auto-detection)
-            progress.update(main_task, description="🎯 Transcribing audio...", advance=10)
-            result = model.transcribe(
-                audio, 
-                batch_size=8,
-                language=language
-            )
-            progress.update(main_task, advance=25)
+            current_progress = progress.tasks[main_task].completed + 10
+            eta = calculate_eta(progress_start_time, current_progress)
+            progress.update(main_task, description="🎯 Starting transcription...", advance=10, eta=eta)
+            
+        # Exit progress context for transcription to show WhisperX progress clearly
+        console.print(f"[dim]⚡ Transcription phase - WhisperX batch progress:[/dim]")
+        
+        transcribe_start = time.time()
+        
+        # Enable WhisperX built-in progress display (outside progress context)
+        result = model.transcribe(
+            audio, 
+            batch_size=8,
+            language=language,
+            print_progress=True,
+            combined_progress=True
+        )
+        
+        transcribe_elapsed = time.time() - transcribe_start
+        actual_speed = duration / transcribe_elapsed if transcribe_elapsed > 0 else 0
+        console.print(f"[green]✅ Transcription complete: {actual_speed:.1f}x realtime speed[/green]")
+        console.print()
+        
+        # Resume with new progress context for remaining steps
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            TextColumn("[dim]ETA: {task.fields[eta]}[/dim]"),
+            console=console,
+            transient=False
+        ) as progress:
+            
+            main_task = progress.add_task("🔗 Post-processing...", total=100, eta="Calculating...")
+            progress.update(main_task, completed=0)  # Start fresh for remaining steps
             
             # Load alignment model
             alignment_model_name = ALIGNMENT_MODELS.get(language, "WAV2VEC2_ASR_LARGE_LV60K_960H")
@@ -340,7 +406,12 @@ def transcribe_audio(
                 hf_token = os.getenv("HF_TOKEN")
                 # Try diarization without token first, fallback with warning if needed
                 try:
-                    progress.update(main_task, description="👥 Identifying speakers...", advance=5)
+                    current_progress = progress.tasks[main_task].completed + 5
+                    eta = calculate_eta(progress_start_time, current_progress)
+                    progress.update(main_task, description="👥 Identifying speakers...", advance=5, eta=eta)
+                    
+                    console.print(f"[dim]🕐 Speaker diarization estimate: {duration*0.2:.0f}-{duration*0.5:.0f}s[/dim]")
+                    diarize_start = time.time()
                     if hf_token:
                         diarize_model = whisperx.diarize.DiarizationPipeline(
                             use_auth_token=hf_token, 
@@ -352,7 +423,14 @@ def transcribe_audio(
                     
                     diarize_segments = diarize_model(audio)
                     result = whisperx.assign_word_speakers(diarize_segments, result)
-                    progress.update(main_task, advance=10)
+                    
+                    diarize_elapsed = time.time() - diarize_start
+                    diarize_speed = duration / diarize_elapsed if diarize_elapsed > 0 else 0
+                    console.print(f"[green]✅ Diarization complete: {diarize_speed:.1f}x realtime speed[/green]")
+                    
+                    current_progress = progress.tasks[main_task].completed + 10
+                    eta = calculate_eta(progress_start_time, current_progress)
+                    progress.update(main_task, advance=10, eta=eta)
                 except Exception as e:
                     console.print(f"[yellow]⚠️ Speaker diarization failed: {str(e)[:100]}[/yellow]")
                     if not hf_token:
@@ -361,10 +439,15 @@ def transcribe_audio(
             else:
                 progress.update(main_task, advance=15)
         
-            # Create output directory
-            progress.update(main_task, description="📁 Creating output directory...", advance=2)
+            # Create output directories
+            progress.update(main_task, description="📁 Creating output directories...", advance=2)
             output_path = Path(output_dir)
             output_path.mkdir(parents=True, exist_ok=True)
+            
+            # Create separate folders for different format types
+            formats_dir = output_path / "formats"
+            if any(fmt != 'txt' for fmt in output_formats):
+                formats_dir.mkdir(parents=True, exist_ok=True)
             
             # Save transcripts in multiple formats
             base_filename = output_path / audio_name
@@ -380,48 +463,53 @@ def transcribe_audio(
             for fmt in output_formats:
                 if fmt == 'txt':
                     progress.update(main_task, description="💾 Saving TXT format...", advance=progress_per_format)
-                    with open(f"{base_filename}.txt", "w", encoding="utf-8") as f:
+                    txt_file = f"{base_filename}.txt"
+                    with open(txt_file, "w", encoding="utf-8") as f:
                         for segment in result["segments"]:
                             speaker = f"[{segment.get('speaker', 'UNKNOWN')}] " if diarize else ""
                             f.write(f"{speaker}{segment['text'].strip()}\n")
-                    saved_files.append(f"{base_filename}.txt")
+                    saved_files.append(txt_file)
                 
                 elif fmt == 'json':
                     progress.update(main_task, description="💾 Saving JSON format...", advance=progress_per_format)
                     import json
-                    with open(f"{base_filename}.json", "w", encoding="utf-8") as f:
+                    json_file = formats_dir / f"{audio_name}.json"
+                    with open(json_file, "w", encoding="utf-8") as f:
                         json.dump(result, f, indent=2, ensure_ascii=False)
-                    saved_files.append(f"{base_filename}.json")
+                    saved_files.append(str(json_file))
                 
                 elif fmt == 'srt':
                     progress.update(main_task, description="💾 Saving SRT format...", advance=progress_per_format)
-                    with open(f"{base_filename}.srt", "w", encoding="utf-8") as f:
+                    srt_file = formats_dir / f"{audio_name}.srt"
+                    with open(srt_file, "w", encoding="utf-8") as f:
                         for i, segment in enumerate(result["segments"], 1):
                             start_time_srt = format_time_srt(segment["start"])
                             end_time_srt = format_time_srt(segment["end"])
                             speaker = f"[{segment.get('speaker', 'UNKNOWN')}] " if diarize else ""
                             f.write(f"{i}\n{start_time_srt} --> {end_time_srt}\n{speaker}{segment['text'].strip()}\n\n")
-                    saved_files.append(f"{base_filename}.srt")
+                    saved_files.append(str(srt_file))
                 
                 elif fmt == 'vtt':
                     progress.update(main_task, description="💾 Saving VTT format...", advance=progress_per_format)
-                    with open(f"{base_filename}.vtt", "w", encoding="utf-8") as f:
+                    vtt_file = formats_dir / f"{audio_name}.vtt"
+                    with open(vtt_file, "w", encoding="utf-8") as f:
                         f.write("WEBVTT\n\n")
                         for segment in result["segments"]:
                             start_time_vtt = format_time_vtt(segment["start"])
                             end_time_vtt = format_time_vtt(segment["end"])
                             speaker = f"[{segment.get('speaker', 'UNKNOWN')}] " if diarize else ""
                             f.write(f"{start_time_vtt} --> {end_time_vtt}\n{speaker}{segment['text'].strip()}\n\n")
-                    saved_files.append(f"{base_filename}.vtt")
+                    saved_files.append(str(vtt_file))
                 
                 elif fmt == 'tsv':
                     progress.update(main_task, description="💾 Saving TSV format...", advance=progress_per_format)
-                    with open(f"{base_filename}.tsv", "w", encoding="utf-8") as f:
+                    tsv_file = formats_dir / f"{audio_name}.tsv"
+                    with open(tsv_file, "w", encoding="utf-8") as f:
                         f.write("start\tend\tspeaker\ttext\n")
                         for segment in result["segments"]:
                             speaker = segment.get('speaker', 'UNKNOWN') if diarize else 'SPEAKER_00'
                             f.write(f"{segment['start']:.3f}\t{segment['end']:.3f}\t{speaker}\t{segment['text'].strip()}\n")
-                    saved_files.append(f"{base_filename}.tsv")
+                    saved_files.append(str(tsv_file))
             
             # Complete the progress
             progress.update(main_task, description="✅ Transcription complete!", completed=100)

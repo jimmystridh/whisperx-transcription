@@ -14,18 +14,18 @@
 
 ## ✨ Features
 
-- 🤖 **Smart Language Detection** - Automatically detects Swedish and English
+- 🤖 **Smart Language Detection** - Automatically detects Swedish and English (for optimal alignment models)
 - 👥 **Speaker Diarization** - Identifies who said what in multi-speaker recordings (Swedish works without HF_TOKEN)
 - 🔄 **Automated Workflow** - Drop files → Get transcripts → Files archived
 - 📱 **Native Notifications** - macOS notifications for processing status
 - 📄 **Multiple Formats** - Default TXT output, customizable to include JSON, SRT, VTT, and TSV
-- ⚡ **Optimized Performance** - int8 compute type for faster processing
+- ⚡ **Optimized Performance** - float32 compute type for better quality (configurable)
 - 🛡️ **Production Ready** - Built with uv for reliable dependency management
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- macOS (for notifications)
+- **macOS only** (notifications and system integration)
 - Python 3.9-3.12
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) package manager
 - [HuggingFace account](https://huggingface.co/join) for speaker diarization (optional for Swedish)
@@ -89,9 +89,10 @@ Perfect for ongoing transcription needs:
 ```bash
 uv run python watcher.py
 ```
+- **Processes existing files first** (no need to move files around)
 - Monitors `incoming/` folder continuously
 - Processes files as soon as they're added
-- Sends notifications for each completed transcription
+- Sends macOS notifications for each completed transcription
 
 ### 🔧 Manual Mode
 For one-off transcriptions:
@@ -142,13 +143,15 @@ uv run python watcher.py [options]
 
 ## 🌍 Language Support
 
-The system intelligently selects the best models based on detected language:
+**Smart Detection:** The system automatically detects Swedish vs English to select optimal alignment models.
 
-| Language | Model | Quality |
-|----------|-------|---------|
-| 🇸🇪 Swedish | `KBLab/wav2vec2-base-voxpopuli-sv-swedish` | Optimized |
-| 🇺🇸 English | `WAV2VEC2_ASR_LARGE_LV60K_960H` | High quality |
-| 🌐 Others | English model (fallback) | Good |
+| Language | Alignment Model | Auto-Detection | Diarization |
+|----------|----------------|----------------|-------------|
+| 🇸🇪 Swedish | `KBLab/wav2vec2-base-voxpopuli-sv-swedish` | ✅ Supported | No HF_TOKEN needed |
+| 🇺🇸 English | `WAV2VEC2_ASR_LARGE_LV60K_960H` | ✅ Supported | Requires HF_TOKEN |
+| 🌐 Others | English model (fallback) | ❌ Manual only | Requires HF_TOKEN |
+
+**Note:** Language detection currently focuses on Swedish/English optimization. Other languages require manual specification with `-l` flag.
 
 ## 📄 Output Formats
 
@@ -188,8 +191,17 @@ Stay informed with native notifications:
 
 ### GPU Acceleration (CUDA)
 ```bash
+# Note: Primarily tested on macOS (CPU-only)
+# GPU support available but not extensively tested on macOS
 uv sync --extra gpu  # Install CUDA support
 uv run python transcribe.py file.m4a --device cuda
+```
+
+### Performance Benchmarking
+```bash
+# Compare different configurations (float32 is now default)
+uv run python benchmark.py audio.m4a
+uv run python benchmark.py audio.m4a --compute-types "float32,int8,float16"
 ```
 
 ### Development Mode
@@ -242,9 +254,10 @@ launchctl load ~/Library/LaunchAgents/com.user.whisperx-watcher.plist
 |-------|----------|
 | "HF_TOKEN not found" | Create `.env` file with your HuggingFace token (not needed for Swedish) |
 | "CUDA not available" | Normal on Mac - system automatically uses CPU |
-| Files not processing | Check file format and ensure complete upload |
-| Slow processing | Consider GPU support or run during off-hours |
-| No notifications | Check macOS notification permissions |
+| Files not processing | Check file format, ensure complete upload, verify macOS compatibility |
+| Slow processing | Use benchmark tool to find optimal settings for your hardware |
+| No notifications | Check macOS notification permissions in System Preferences |
+| Language detection issues | Currently optimized for Swedish/English only - use `-l` flag for others |
 
 ### Debug Logs
 Monitor system activity:
