@@ -225,7 +225,12 @@ class TranscriptionHandler(FileSystemEventHandler):
                 "-o", str(self.transcripts_dir),
                 "--all-formats"
             ]
-            
+
+            # Check if filename contains "-nospeakers" to skip diarization
+            if "-nospeakers" in file_path.stem.lower():
+                cmd.append("--no-diarize")
+                console.print("👤 Detected '-nospeakers' in filename - skipping speaker diarization")
+
             console.print(f"🚀 Running: [dim]{' '.join(cmd)}[/dim]")
             console.print()  # Add some spacing before transcribe.py output
             
