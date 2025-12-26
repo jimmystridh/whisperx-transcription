@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.whisperx.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Update this path to your uv installation -->
+        <string>/Users/js/.local/bin/uv</string>
+        <string>run</string>
+        <string>python</string>
+        <string>watcher.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/js/Documents/whisperx-transcription</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/js/.whisperx/daemon.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/js/.whisperx/daemon.error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>
