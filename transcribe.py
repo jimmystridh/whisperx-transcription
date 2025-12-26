@@ -363,6 +363,12 @@ def transcribe_audio(
         console.print(f"[green]✅ Transcription complete: {actual_speed:.1f}x realtime speed[/green]")
         console.print()
         
+        # Create output directories and initialize variables before progress context
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        base_filename = output_path / audio_name
+        saved_files = []
+
         # Resume with new progress context for remaining steps
         with Progress(
             SpinnerColumn(),
@@ -375,31 +381,41 @@ def transcribe_audio(
             console=console,
             transient=False
         ) as progress:
-            
+
             main_task = progress.add_task("🔗 Post-processing...", total=100, eta="Calculating...")
             progress.update(main_task, completed=0)  # Start fresh for remaining steps
-            
+
             # Load alignment model
             alignment_model_name = ALIGNMENT_MODELS.get(language, "WAV2VEC2_ASR_LARGE_LV60K_960H")
             progress.update(main_task, description=f"🔗 Loading alignment model...", advance=5)
-            
+
             model_a, metadata = whisperx.load_align_model(
-                language_code=language, 
+                language_code=language,
                 device=device,
                 model_name=alignment_model_name
             )
-            
+
             # Align whisper output
             progress.update(main_task, description="⚡ Aligning transcription...", advance=10)
             result = whisperx.align(
-                result["segments"], 
-                model_a, 
-                metadata, 
-                audio, 
-                device, 
+                result["segments"],
+                model_a,
+                metadata,
+                audio,
+                device,
                 return_char_alignments=False
             )
             progress.update(main_task, advance=15)
+
+            # Save intermediate transcript before diarization
+            if diarize:
+                progress.update(main_task, description="💾 Saving intermediate transcript...", advance=2)
+                raw_txt_file = f"{base_filename}_raw.txt"
+                with open(raw_txt_file, "w", encoding="utf-8") as f:
+                    for segment in result["segments"]:
+                        f.write(f"{segment['text'].strip()}\n")
+                saved_files.append(raw_txt_file)
+                console.print(f"💾 Saved intermediate transcript: [dim]{raw_txt_file}[/dim]")
             
             # Diarization (speaker identification)
             if diarize:
@@ -438,26 +454,18 @@ def transcribe_audio(
                     progress.update(main_task, advance=15)
             else:
                 progress.update(main_task, advance=15)
-        
-            # Create output directories
-            progress.update(main_task, description="📁 Creating output directories...", advance=2)
-            output_path = Path(output_dir)
-            output_path.mkdir(parents=True, exist_ok=True)
-            
+
             # Create separate folders for different format types
+            progress.update(main_task, description="📁 Setting up output formats...", advance=2)
             formats_dir = output_path / "formats"
             if any(fmt != 'txt' for fmt in output_formats):
                 formats_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Save transcripts in multiple formats
-            base_filename = output_path / audio_name
-            
+
             # Count segments for progress
             num_segments = len(result["segments"])
             console.print(f"📝 Found {num_segments} segments to save")
-            
+
             # Save files in requested formats
-            saved_files = []
             progress_per_format = 10 // len(output_formats)  # Distribute 10% across formats
             
             for fmt in output_formats:
