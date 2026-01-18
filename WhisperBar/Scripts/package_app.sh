@@ -17,9 +17,22 @@ rm -rf "$APP_BUNDLE"
 # Create bundle structure
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 
 # Copy binary
 cp ".build/release/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+
+# Find and copy Sparkle framework
+SPARKLE_PATH=$(find .build -name "Sparkle.framework" -type d 2>/dev/null | head -1)
+if [ -n "$SPARKLE_PATH" ]; then
+    echo "Copying Sparkle framework from $SPARKLE_PATH..."
+    cp -R "$SPARKLE_PATH" "$APP_BUNDLE/Contents/Frameworks/"
+
+    # Fix rpath for Sparkle
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+else
+    echo "Warning: Sparkle.framework not found in build directory"
+fi
 
 # Create Info.plist
 cat > "$APP_BUNDLE/Contents/Info.plist" << 'EOF'

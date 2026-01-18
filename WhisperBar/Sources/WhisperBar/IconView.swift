@@ -4,8 +4,16 @@ import SwiftUI
 struct IconView: View {
     let status: TranscriptionStatus
     let progress: Double
+    let stage: String?
 
-    @State private var animationPhase: CGFloat = 0
+    private var stableKey: String {
+        switch self.status {
+        case .idle: "idle"
+        case let .transcribing(_, currentStage): "transcribing-\(currentStage)"
+        case .error: "error"
+        case .disconnected: "disconnected"
+        }
+    }
 
     var body: some View {
         Group {
@@ -14,10 +22,8 @@ struct IconView: View {
                 Image(systemName: "waveform")
                     .symbolRenderingMode(.hierarchical)
 
-            case .transcribing:
-                Image(systemName: "waveform")
-                    .symbolEffect(.variableColor.iterative.reversing)
-                    .foregroundStyle(.blue)
+            case let .transcribing(_, currentStage):
+                self.iconForStage(currentStage)
 
             case .error:
                 Image(systemName: "waveform.badge.exclamationmark")
@@ -31,6 +37,45 @@ struct IconView: View {
             }
         }
         .imageScale(.medium)
+        .id(self.stableKey)
+    }
+
+    @ViewBuilder
+    private func iconForStage(_ stage: String) -> some View {
+        // Keep all icons waveform-based for consistency
+        switch stage {
+        case "loading":
+            Image(systemName: "waveform.path.ecg")
+                .symbolEffect(.pulse)
+
+        case "detecting":
+            Image(systemName: "waveform.badge.magnifyingglass")
+                .symbolEffect(.pulse)
+
+        case "transcribing":
+            Image(systemName: "waveform")
+                .symbolEffect(.variableColor.iterative.reversing)
+
+        case "aligning":
+            Image(systemName: "waveform.path")
+                .symbolEffect(.pulse)
+
+        case "diarization":
+            Image(systemName: "waveform.and.person.filled")
+                .symbolEffect(.variableColor.iterative)
+
+        case "saving":
+            Image(systemName: "waveform.circle")
+                .symbolEffect(.pulse)
+
+        case "complete":
+            Image(systemName: "waveform.badge.checkmark")
+                .symbolEffect(.pulse)
+
+        default:
+            Image(systemName: "waveform")
+                .symbolEffect(.variableColor.iterative.reversing)
+        }
     }
 }
 

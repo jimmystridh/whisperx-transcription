@@ -320,18 +320,17 @@ class StateManager:
         """Handle a connected SwiftUI client."""
         self._clients.append(writer)
 
-        # Send current state on connect
-        state_dict = {
-            "event": "state",
-            "status": self._state.status,
-            "current": asdict(self._state.current) if self._state.current else None,
-            "queue": self._state.queue,
-            "history": [asdict(t) for t in self._history[:10]],
-        }
-        writer.write((json.dumps(state_dict, default=str) + "\n").encode())
-        await writer.drain()
-
         try:
+            # Send current state on connect
+            state_dict = {
+                "event": "state",
+                "status": self._state.status,
+                "current": asdict(self._state.current) if self._state.current else None,
+                "queue": self._state.queue,
+                "history": [asdict(t) for t in self._history[:10]],
+            }
+            writer.write((json.dumps(state_dict, default=str) + "\n").encode())
+            await writer.drain()
             while True:
                 data = await reader.readline()
                 if not data:

@@ -4,6 +4,7 @@ WhisperX Automated Transcription Script
 Transcribes audio files with language detection, alignment, and diarization.
 """
 
+import json
 import os
 import sys
 import time
@@ -16,6 +17,9 @@ import argparse
 import whisperx
 import torch
 from dotenv import load_dotenv
+
+# Progress file for daemon communication
+PROGRESS_FILE = Path.home() / ".whisperx" / "progress.json"
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TimeRemainingColumn
 from datetime import datetime, timedelta
@@ -57,6 +61,30 @@ ALIGNMENT_MODELS = {
 SUPPORTED_FORMATS = {'.m4a', '.mp4', '.mov', '.wav', '.mp3', '.flac', '.ogg'}
 
 
+def update_progress(stage: str, percent: float, detail: str = ""):
+    """Update progress file for daemon/menu bar app communication."""
+    try:
+        PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        progress_data = {
+            "stage": stage,
+            "percent": round(percent, 1),
+            "detail": detail,
+            "timestamp": datetime.now().isoformat()
+        }
+        PROGRESS_FILE.write_text(json.dumps(progress_data))
+    except OSError:
+        pass  # Ignore errors writing progress
+
+
+def clear_progress():
+    """Clear progress file when transcription completes."""
+    try:
+        if PROGRESS_FILE.exists():
+            PROGRESS_FILE.unlink()
+    except OSError:
+        pass
+
+
 def send_notification(title: str, message: str, sound: bool = True):
     """Send macOS notification using osascript."""
     try:
@@ -75,7 +103,8 @@ def detect_language(audio_path: str, device: str = "cpu") -> Tuple[str, float]:
     Returns (language_code, confidence_score)
     """
     console.print("🔍 Starting enhanced language detection...")
-    
+    update_progress("detecting", 5, "Starting language detection")
+
     try:
         # Load audio
         console.print("📁 Loading audio file...")
@@ -109,9 +138,10 @@ def detect_language(audio_path: str, device: str = "cpu") -> Tuple[str, float]:
             sample_positions = [(5, min(total_duration - 5, 55), "full")]
         
         console.print(f"🎯 Testing {len(sample_positions)} audio samples...")
-        
+
         # Test each sample
-        for start_time, end_time, position in sample_positions:
+        for idx, (start_time, end_time, position) in enumerate(sample_positions):
+            update_progress("detecting", 8 + (idx * 4), f"Analyzing {position} sample")
             start_sample = int(start_time * 16000)
             end_sample = int(end_time * 16000)
             
@@ -286,12 +316,14 @@ def transcribe_audio(
     
     start_time = time.time()
     audio_name = Path(audio_path).stem
-    
+
     # Display header
     console.print()
     console.rule(f"[bold blue]🎙️ Transcribing: {audio_name}")
     console.print()
-    
+
+    update_progress("loading", 0, f"Starting: {audio_name}")
+
     try:
         # Create enhanced progress tracking with ETA
         with Progress(
@@ -310,6 +342,7 @@ def transcribe_audio(
             
             # Load audio
             progress.update(main_task, description="📁 Loading audio file...", advance=10, eta="Calculating...")
+            update_progress("loading", 10, "Loading audio file")
             audio = whisperx.load_audio(audio_path)
             
             # Get audio duration for better progress tracking
@@ -337,6 +370,7 @@ def transcribe_audio(
             current_progress = progress.tasks[main_task].completed + 15
             eta = calculate_eta(progress_start_time, current_progress)
             progress.update(main_task, description=f"🤖 Loading Whisper model ({language.upper()})...", advance=15, eta=eta)
+            update_progress("loading", 25, f"Loading Whisper model ({language.upper()})")
             model = whisperx.load_model("large-v3", device, compute_type="float32", language=language)
             
             # Transcribe (pass language explicitly to avoid WhisperX auto-detection)
@@ -346,22 +380,24 @@ def transcribe_audio(
             
         # Exit progress context for transcription to show WhisperX progress clearly
         console.print(f"[dim]⚡ Transcription phase - WhisperX batch progress:[/dim]")
-        
+
+        update_progress("transcribing", 30, "Transcribing audio...")
         transcribe_start = time.time()
-        
+
         # Enable WhisperX built-in progress display (outside progress context)
         result = model.transcribe(
-            audio, 
+            audio,
             batch_size=8,
             language=language,
             print_progress=True,
             combined_progress=True
         )
-        
+
         transcribe_elapsed = time.time() - transcribe_start
         actual_speed = duration / transcribe_elapsed if transcribe_elapsed > 0 else 0
         console.print(f"[green]✅ Transcription complete: {actual_speed:.1f}x realtime speed[/green]")
         console.print()
+        update_progress("transcribing", 60, "Transcription complete")
         
         # Create output directories and initialize variables before progress context
         output_path = Path(output_dir)
@@ -388,6 +424,7 @@ def transcribe_audio(
             # Load alignment model
             alignment_model_name = ALIGNMENT_MODELS.get(language, "WAV2VEC2_ASR_LARGE_LV60K_960H")
             progress.update(main_task, description=f"🔗 Loading alignment model...", advance=5)
+            update_progress("aligning", 65, "Loading alignment model")
 
             model_a, metadata = whisperx.load_align_model(
                 language_code=language,
@@ -397,6 +434,7 @@ def transcribe_audio(
 
             # Align whisper output
             progress.update(main_task, description="⚡ Aligning transcription...", advance=10)
+            update_progress("aligning", 70, "Aligning transcription")
             result = whisperx.align(
                 result["segments"],
                 model_a,
@@ -425,7 +463,8 @@ def transcribe_audio(
                     current_progress = progress.tasks[main_task].completed + 5
                     eta = calculate_eta(progress_start_time, current_progress)
                     progress.update(main_task, description="👥 Identifying speakers...", advance=5, eta=eta)
-                    
+                    update_progress("diarization", 75, "Identifying speakers")
+
                     console.print(f"[dim]🕐 Speaker diarization estimate: {duration*0.2:.0f}-{duration*0.5:.0f}s[/dim]")
                     diarize_start = time.time()
                     if hf_token:
@@ -443,7 +482,8 @@ def transcribe_audio(
                     diarize_elapsed = time.time() - diarize_start
                     diarize_speed = duration / diarize_elapsed if diarize_elapsed > 0 else 0
                     console.print(f"[green]✅ Diarization complete: {diarize_speed:.1f}x realtime speed[/green]")
-                    
+                    update_progress("diarization", 85, "Diarization complete")
+
                     current_progress = progress.tasks[main_task].completed + 10
                     eta = calculate_eta(progress_start_time, current_progress)
                     progress.update(main_task, advance=10, eta=eta)
@@ -457,6 +497,7 @@ def transcribe_audio(
 
             # Create separate folders for different format types
             progress.update(main_task, description="📁 Setting up output formats...", advance=2)
+            update_progress("saving", 90, "Saving output files")
             formats_dir = output_path / "formats"
             if any(fmt != 'txt' for fmt in output_formats):
                 formats_dir.mkdir(parents=True, exist_ok=True)
@@ -521,6 +562,7 @@ def transcribe_audio(
             
             # Complete the progress
             progress.update(main_task, description="✅ Transcription complete!", completed=100)
+            update_progress("complete", 100, "Transcription complete")
         
         processing_time = time.time() - start_time
         
@@ -557,7 +599,10 @@ def transcribe_audio(
             f"Transcription Complete: {audio_name}",
             f"Language: {language.upper()} | Time: {processing_time:.1f}s{speakers_text}"
         )
-        
+
+        # Clear progress file on success
+        clear_progress()
+
         return {
             "status": "success",
             "language": language,
@@ -587,7 +632,10 @@ def transcribe_audio(
             f"Error: {str(e)[:100]}...",
             sound=True
         )
-        
+
+        # Clear progress file on error
+        clear_progress()
+
         return {
             "status": "error",
             "error": str(e),

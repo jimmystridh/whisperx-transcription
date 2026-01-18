@@ -125,26 +125,7 @@ struct TranscriptRow: View {
             }
         }
 
-        // Check for EDITOR environment variable
-        if let editor = ProcessInfo.processInfo.environment["EDITOR"], !editor.isEmpty {
-            // Launch editor in Terminal
-            let script = """
-            tell application "Terminal"
-                activate
-                do script "\(editor) '\(targetPath.path)'"
-            end tell
-            """
-
-            var error: NSDictionary?
-            if let appleScript = NSAppleScript(source: script) {
-                appleScript.executeAndReturnError(&error)
-                if error == nil {
-                    return
-                }
-            }
-        }
-
-        // Fallback to default app (usually TextEdit)
+        // Open with default app (usually TextEdit)
         NSWorkspace.shared.open(targetPath)
     }
 }

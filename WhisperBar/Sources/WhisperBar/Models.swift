@@ -81,6 +81,19 @@ struct DaemonState: Codable, Sendable {
     let current: TranscriptionProgress?
     let queue: [String]
     let history: [Transcript]?
+    let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, current, queue, history
+        case errorMessage = "error_message"
+    }
+}
+
+struct ProgressFileData: Codable, Sendable {
+    let stage: String
+    let percent: Double
+    let detail: String
+    let timestamp: String
 }
 
 struct DaemonEvent: Codable, Sendable {

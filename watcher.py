@@ -38,15 +38,30 @@ load_dotenv()
 # Initialize rich console
 console = Console()
 
-# Configure logging to be quieter for rich output
+# Configure logging to ~/.whisperx/daemon.log
+LOG_DIR = Path.home() / ".whisperx"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "daemon.log"
+
 logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
-        logging.FileHandler('watcher.log'),
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def log_info(message: str):
+    """Log info message and optionally print to console."""
+    logger.info(message)
+
+
+def log_error(message: str):
+    """Log error message."""
+    logger.error(message)
 
 # Supported audio formats
 SUPPORTED_FORMATS = {'.m4a', '.mp4', '.mov', '.wav', '.mp3', '.flac', '.ogg'}
@@ -162,12 +177,15 @@ class TranscriptionHandler(FileSystemEventHandler):
 
             # Mark as processing
             self.processing_files.add(file_key)
+            log_info(f"Starting transcription: {file_path.name}")
 
             with self.lock:
                 self.stats['current_file'] = file_path.name
 
             # Get audio duration for state manager
             duration = self._get_audio_duration(file_path)
+            if duration > 0:
+                log_info(f"Audio duration: {duration:.1f}s")
 
             # Display processing start
             console.print()
@@ -200,16 +218,28 @@ class TranscriptionHandler(FileSystemEventHandler):
                 self.stats['current_file'] = None
 
             if success:
-                # Move to archive
-                archive_path = self.archive_dir / file_path.name
-                counter = 1
-                while archive_path.exists():
-                    name_parts = file_path.stem, counter, file_path.suffix
-                    archive_path = self.archive_dir / f"{name_parts[0]}_{name_parts[1]}{name_parts[2]}"
-                    counter += 1
+                log_info(f"Transcription completed: {file_path.name} ({processing_time:.1f}s)")
 
-                shutil.move(str(file_path), str(archive_path))
-                console.print(f"📦 Moved to archive: [green]{archive_path.name}[/green]")
+                # Check for .noarchive marker (file was added via menu bar picker)
+                noarchive_marker = file_path.parent / f"{file_path.name}.noarchive"
+                if noarchive_marker.exists():
+                    # Delete instead of archive - file exists elsewhere
+                    file_path.unlink()
+                    noarchive_marker.unlink()
+                    console.print(f"🗑️  Deleted (original exists elsewhere): [dim]{file_path.name}[/dim]")
+                    log_info(f"Deleted (no archive): {file_path.name}")
+                else:
+                    # Move to archive
+                    archive_path = self.archive_dir / file_path.name
+                    counter = 1
+                    while archive_path.exists():
+                        name_parts = file_path.stem, counter, file_path.suffix
+                        archive_path = self.archive_dir / f"{name_parts[0]}_{name_parts[1]}{name_parts[2]}"
+                        counter += 1
+
+                    shutil.move(str(file_path), str(archive_path))
+                    console.print(f"📦 Moved to archive: [green]{archive_path.name}[/green]")
+                    log_info(f"Archived to: {archive_path.name}")
 
                 # Mark as processed
                 self.processed_files.add(file_key)
@@ -237,6 +267,7 @@ class TranscriptionHandler(FileSystemEventHandler):
             else:
                 # Update state to failed
                 error_msg = result_info.get("error", "Unknown error")
+                log_error(f"Transcription failed: {file_path.name} - {error_msg}")
                 if self.state_manager:
                     self.state_manager.set_failed_sync(file_path.name, error_msg)
 
@@ -253,7 +284,7 @@ class TranscriptionHandler(FileSystemEventHandler):
 
         except Exception as e:
             console.print(f"[red]💥 Unexpected error processing {file_path.name}: {e}[/red]")
-            logger.error(f"Error processing {file_path.name}: {e}")
+            log_error(f"Unexpected error processing {file_path.name}: {e}")
             if self.state_manager:
                 self.state_manager.set_failed_sync(file_path.name, str(e))
             self.processing_files.discard(str(file_path))
@@ -436,10 +467,13 @@ async def run_daemon(args):
     # Initialize state manager
     state_manager = get_state_manager()
     state_manager.write_pid()
+    log_info("Daemon starting...")
+    log_info(f"PID: {os.getpid()}")
 
     # Start socket server for SwiftUI app
     await state_manager.start_server()
     console.print(f"[dim]🔌 Socket server listening at: {state_manager.socket_path}[/dim]")
+    log_info(f"Socket server started: {state_manager.socket_path}")
 
     # Display configuration
     config_table = Table(title="⚙️ Configuration", show_header=True, header_style="bold blue")
@@ -499,6 +533,7 @@ async def run_daemon(args):
     def signal_handler():
         console.print()
         console.print("[yellow]🛑 Stopping daemon...[/yellow]")
+        log_info("Daemon stopping (signal received)")
         stop_event.set()
 
     loop.add_signal_handler(signal.SIGINT, signal_handler)
@@ -517,6 +552,7 @@ async def run_daemon(args):
         console.print()
         console.print(handler.get_stats_table())
         console.print("[bold blue]👋 Daemon stopped successfully![/bold blue]")
+        log_info(f"Daemon stopped. Stats: {handler.stats['total_processed']} processed, {handler.stats['successful']} successful, {handler.stats['failed']} failed")
 
 
 def main():

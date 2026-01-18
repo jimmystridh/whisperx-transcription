@@ -50,11 +50,13 @@ final class HistoryStore: ObservableObject {
         case "state":
             if let history = event.history {
                 self.transcripts = history
+                    .sorted { ($0.completedDate ?? .distantPast) > ($1.completedDate ?? .distantPast) }
             }
 
         case "history":
             if let transcripts = event.transcripts {
                 self.transcripts = transcripts
+                    .sorted { ($0.completedDate ?? .distantPast) > ($1.completedDate ?? .distantPast) }
             }
 
         case "completed":

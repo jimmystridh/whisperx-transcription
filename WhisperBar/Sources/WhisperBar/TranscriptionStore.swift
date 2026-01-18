@@ -7,12 +7,17 @@ final class TranscriptionStore: ObservableObject {
     @Published var progress: Double = 0
     @Published var currentFilename: String?
     @Published var currentStage: String?
+    @Published var currentDetail: String?
     @Published var queue: [String] = []
     @Published var isConnected: Bool = false
 
     private let connection: DaemonConnection
     private var eventTask: Task<Void, Never>?
     private var statePollingTask: Task<Void, Never>?
+    private var progressPollingTask: Task<Void, Never>?
+
+    private let progressFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".whisperx/progress.json")
 
     init(connection: DaemonConnection) {
         self.connection = connection
@@ -38,6 +43,46 @@ final class TranscriptionStore: ObservableObject {
                     await self.loadStateFromFile()
                 }
             }
+        }
+
+        // Poll for progress file (faster interval for real-time updates)
+        self.progressPollingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                await self.loadProgressFromFile()
+            }
+        }
+    }
+
+    private func loadProgressFromFile() async {
+        guard FileManager.default.fileExists(atPath: self.progressFile.path) else {
+            return
+        }
+
+        do {
+            let data = try Data(contentsOf: self.progressFile)
+            let progressData = try JSONDecoder().decode(ProgressFileData.self, from: data)
+
+            await MainActor.run {
+                // Only update if values changed to avoid triggering animations
+                if self.progress != progressData.percent {
+                    self.progress = progressData.percent
+                }
+                if self.currentStage != progressData.stage {
+                    self.currentStage = progressData.stage
+                }
+                if self.currentDetail != progressData.detail {
+                    self.currentDetail = progressData.detail
+                }
+
+                if case .transcribing(let filename, let oldStage) = self.status {
+                    if oldStage != progressData.stage {
+                        self.status = .transcribing(filename: filename, stage: progressData.stage)
+                    }
+                }
+            }
+        } catch {
+            // Progress file unreadable or not in expected format
         }
     }
 
@@ -115,7 +160,9 @@ final class TranscriptionStore: ObservableObject {
 
         guard FileManager.default.fileExists(atPath: stateFile.path) else {
             await MainActor.run {
-                self.status = .disconnected
+                if self.status != .disconnected {
+                    self.status = .disconnected
+                }
                 self.isConnected = false
             }
             return
@@ -127,17 +174,47 @@ final class TranscriptionStore: ObservableObject {
 
             await MainActor.run {
                 if let current = state.current {
-                    self.status = .transcribing(filename: current.filename, stage: current.stage)
-                    self.progress = current.progressPercent
-                    self.currentFilename = current.filename
-                    self.currentStage = current.stage
+                    // Only update status and filename from state.json
+                    // Progress comes from progress.json (more up-to-date)
+                    let currentStage = self.currentStage ?? current.stage
+                    let newStatus = TranscriptionStatus.transcribing(
+                        filename: current.filename, stage: currentStage)
+                    if self.status != newStatus {
+                        self.status = newStatus
+                    }
+                    if self.currentFilename != current.filename {
+                        self.currentFilename = current.filename
+                    }
+                    // Don't update progress or stage from state.json - progress.json is authoritative
                 } else if state.status == "idle" {
-                    self.status = .idle
-                    self.progress = 0
+                    if self.status != .idle {
+                        self.status = .idle
+                    }
+                    if self.progress != 0 {
+                        self.progress = 0
+                    }
+                    if self.currentFilename != nil {
+                        self.currentFilename = nil
+                    }
+                    if self.currentStage != nil {
+                        self.currentStage = nil
+                    }
                 } else if state.status == "error" {
-                    self.status = .error("Check daemon logs")
+                    let errorMsg = state.errorMessage ?? "Check daemon logs"
+                    let newStatus = TranscriptionStatus.error(errorMsg)
+                    if self.status != newStatus {
+                        self.status = newStatus
+                    }
+                    if self.currentFilename != nil {
+                        self.currentFilename = nil
+                    }
+                    if self.currentStage != nil {
+                        self.currentStage = nil
+                    }
                 }
-                self.queue = state.queue
+                if self.queue != state.queue {
+                    self.queue = state.queue
+                }
             }
         } catch {
             // State file unreadable
@@ -151,5 +228,6 @@ final class TranscriptionStore: ObservableObject {
     deinit {
         self.eventTask?.cancel()
         self.statePollingTask?.cancel()
+        self.progressPollingTask?.cancel()
     }
 }
